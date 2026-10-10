@@ -1,5 +1,5 @@
 // Duskhollow service worker: precache everything, network-first with cache fallback (so updates show, offline still works).
-const CACHE = 'duskhollow-v1';
+const CACHE = 'duskhollow-v2';
 const ASSETS = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './vendor/phaser.min.js', './vendor/easystar.min.js',

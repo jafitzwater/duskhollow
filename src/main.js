@@ -23,6 +23,10 @@ const CONFIG = {
 };
 const DPR = Math.min(window.devicePixelRatio || 1, 2);
 const FLOOR_DEPTH = -1e7;
+const HERO_COLS = 20;
+const STATS = { HP_MAX: 100, MP_MAX: 60, HP_START: 58, MP_START: 24, HP_POTION: 40, MP_POTION: 30, POTIONS: 3,
+  SKILL_COST: 12, SKILL_COOLDOWN: 3500, SWING_MS: 260, CAST_MS: 420, TALK_RANGE: 1.9 };
+const Settings = { tapToMove: localStorage.getItem('dh_tapToMove') === '1' };
 
 // ---------- projection (the ONLY place grid -> screen happens) ----------
 const Iso = {
@@ -200,7 +204,7 @@ const Dialogue = {
     document.addEventListener('pointerdown', (e) => {
       if (!this.open) return;
       if (e.target.closest && (e.target.closest('#hud button') || e.target.closest('#credits'))) return;
-      e.preventDefault(); this.advance();
+      e.preventDefault(); e.stopPropagation(); this.advance();
     }, true);
   },
   show(name, role, lines, onClose) {
@@ -208,6 +212,7 @@ const Dialogue = {
     document.getElementById('dlgName').textContent = name;
     document.getElementById('dlgRole').textContent = role || '';
     this.el.classList.remove('hidden');
+    document.body.classList.add('dlg-open'); Controls.release();
     this.type();
   },
   type() {
@@ -229,6 +234,7 @@ const Dialogue = {
   close() {
     this.open = false; clearInterval(this.timer); this.timer = null; this.closedAt = performance.now();
     this.el.classList.add('hidden');
+    document.body.classList.remove('dlg-open');
     if (this.onClose) this.onClose();
   }
 };
@@ -236,6 +242,112 @@ function toast(msg, ms = 1800) {
   const t = document.getElementById('toast'); t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toast._h); toast._h = setTimeout(() => t.classList.add('hidden'), ms);
 }
+
+// ---------- touch controls: floating joystick + action buttons (DOM, multitouch via pointer ids) ----------
+const Controls = {
+  scene: null, joy: { id: null, ox: 0, oy: 0, x: 0, y: 0, mag: 0 }, keys: {}, attackHeld: false, R: 52, DEAD: 9,
+  init() {
+    const zone = document.getElementById('joyZone'), base = document.getElementById('joyBase'), knob = document.getElementById('joyKnob');
+    this.base = base; this.knob = knob;
+    zone.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (this.joy.id !== null || Dialogue.open) return;
+      this.joy.id = e.pointerId; this.joy.ox = e.clientX; this.joy.oy = e.clientY;
+      try { zone.setPointerCapture(e.pointerId); } catch (_) {}
+      base.classList.remove('rest'); base.style.left = e.clientX + 'px'; base.style.top = e.clientY + 'px';
+      this.moveKnob(e.clientX, e.clientY);
+    });
+    zone.addEventListener('pointermove', (e) => { if (e.pointerId === this.joy.id) { e.preventDefault(); this.moveKnob(e.clientX, e.clientY); } });
+    const end = (e) => { if (e.pointerId === this.joy.id) this.release(); };
+    zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end); zone.addEventListener('lostpointercapture', end);
+    const bind = (id, down, up) => {
+      const b = document.getElementById(id);
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); try { b.setPointerCapture(e.pointerId); } catch (_) {} b.classList.add('pressed'); if (this.scene && !Dialogue.open) down(); });
+      const u = (e) => { b.classList.remove('pressed'); if (up) up(); };
+      b.addEventListener('pointerup', u); b.addEventListener('pointercancel', u); b.addEventListener('lostpointercapture', u);
+      b.addEventListener('contextmenu', e => e.preventDefault());
+    };
+    bind('btnAttack', () => { this.attackHeld = true; this.scene.attack(); }, () => { this.attackHeld = false; });
+    bind('btnSkill', () => this.scene.skill());
+    bind('btnTalk', () => this.scene.interact());
+    bind('btnHp', () => this.scene.drink('hp'));
+    bind('btnMp', () => this.scene.drink('mp'));
+    // keyboard for desktop testing
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase(); this.keys[k] = true;
+      if (!this.scene || !this.scene.sys.isActive()) return;
+      if (Dialogue.open) { if (k === ' ' || k === 'enter' || k === 'e') { e.preventDefault(); Dialogue.advance(); } return; }
+      if (k === ' ') { e.preventDefault(); if (!e.repeat) { this.attackHeld = true; this.scene.attack(); } }
+      else if (k === 'f' && !e.repeat) this.scene.skill();
+      else if ((k === 'e' || k === 'enter') && !e.repeat) this.scene.interact();
+      else if (k === '1' && !e.repeat) this.scene.drink('hp');
+      else if (k === '2' && !e.repeat) this.scene.drink('mp');
+      if (k.startsWith('arrow')) e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => { const k = e.key.toLowerCase(); this.keys[k] = false; if (k === ' ') this.attackHeld = false; });
+    window.addEventListener('blur', () => { this.keys = {}; this.attackHeld = false; this.release(); });
+    this.loop();
+  },
+  moveKnob(cx, cy) {
+    let dx = cx - this.joy.ox, dy = cy - this.joy.oy; const d = Math.hypot(dx, dy);
+    if (d > this.R) { dx = dx / d * this.R; dy = dy / d * this.R; }
+    this.knob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    const m = d <= this.DEAD ? 0 : Math.min(1, (d - this.DEAD) / (this.R - this.DEAD));
+    this.joy.mag = m; this.joy.x = d ? dx / Math.min(d, this.R) : 0; this.joy.y = d ? dy / Math.min(d, this.R) : 0;
+  },
+  release() {
+    this.joy.id = null; this.joy.mag = 0; this.joy.x = this.joy.y = 0; this.attackHeld = false;
+    if (this.knob) { this.knob.style.transform = ''; this.base.classList.add('rest'); this.base.style.left = ''; this.base.style.top = ''; }
+  },
+  vector() {
+    if (this.joy.mag > 0) return { x: this.joy.x, y: this.joy.y, mag: this.joy.mag };
+    const K = this.keys; let x = 0, y = 0;
+    if (K['a'] || K['arrowleft']) x -= 1; if (K['d'] || K['arrowright']) x += 1;
+    if (K['w'] || K['arrowup']) y -= 1; if (K['s'] || K['arrowdown']) y += 1;
+    return (x || y) ? { x, y, mag: 1 } : { x: 0, y: 0, mag: 0 };
+  },
+  attach(scene) { this.scene = scene; this.release(); this._talk = undefined; },
+  setTalk(name) {
+    if (name === this._talk) return; this._talk = name;
+    const b = document.getElementById('btnTalk'); b.classList.toggle('ready', !!name);
+    document.getElementById('talkLbl').textContent = name || 'Talk';
+  },
+  setStats(st) {
+    const q = (id) => document.getElementById(id);
+    q('hpFill').style.height = (st.hp / STATS.HP_MAX * 100) + '%'; q('hpText').textContent = Math.round(st.hp);
+    q('mpFill').style.height = (st.mp / STATS.MP_MAX * 100) + '%'; q('mpText').textContent = Math.round(st.mp);
+    q('hpCount').textContent = st.hpPot; q('mpCount').textContent = st.mpPot;
+    q('btnHp').classList.toggle('dim', st.hpPot <= 0); q('btnMp').classList.toggle('dim', st.mpPot <= 0);
+  },
+  flashOrb(kind) { const o = document.getElementById(kind === 'hp' ? 'orbHp' : 'orbMp'); o.classList.remove('flash'); void o.offsetWidth; o.classList.add('flash'); },
+  loop() {
+    const s = this.scene;
+    if (s && s.sys && s.sys.isActive()) {
+      const st = s.stats, now = s.time.now, left = Math.max(0, st.skillReadyAt - now);
+      const pct = left > 0 ? (left / STATS.SKILL_COOLDOWN * 100) : 0;
+      const cd = document.getElementById('skillCd'); cd.style.setProperty('--cd', pct.toFixed(1) + '%');
+      document.getElementById('btnSkill').classList.toggle('dim', left === 0 && st.mp < STATS.SKILL_COST);
+    }
+    requestAnimationFrame(() => this.loop());
+  }
+};
+const Menu = {
+  init() {
+    const m = document.getElementById('menu');
+    const sync = () => {
+      document.getElementById('mTap').textContent = 'Tap-to-move: ' + (Settings.tapToMove ? 'On' : 'Off');
+      document.getElementById('mSound').textContent = 'Sound: ' + (Sound.on ? 'On' : 'Off');
+      document.body.classList.toggle('tapmove', Settings.tapToMove);
+    };
+    this.sync = sync; sync();
+    this.open = () => { if (Dialogue.open) Dialogue.close(); Controls.release(); sync(); m.classList.remove('hidden'); const g = window.__game; if (g && g.scene.isActive('Town')) g.scene.pause('Town'); };
+    const close = () => { m.classList.add('hidden'); const g = window.__game; if (g && g.scene.isPaused('Town')) g.scene.resume('Town'); };
+    document.getElementById('mResume').addEventListener('click', close);
+    document.getElementById('mTap').addEventListener('click', () => { Settings.tapToMove = !Settings.tapToMove; localStorage.setItem('dh_tapToMove', Settings.tapToMove ? '1' : '0'); sync(); });
+    document.getElementById('mSound').addEventListener('click', () => { Sound.start(); Sound.toggle(); sync(); });
+    document.getElementById('mTitle').addEventListener('click', () => { m.classList.add('hidden'); const g = window.__game; if (g) { g.scene.stop('Town'); g.scene.start('Title'); } });
+  }
+};
 
 // ---------- Scenes ----------
 class BootScene extends Phaser.Scene {
@@ -264,8 +376,11 @@ class BootScene extends Phaser.Scene {
     tex.add('tower', 0, 512, 736, 256, 256);
     // Animations: hero sheet = 12 cols (4 stance + 8 run) x 8 dirs; NPC sheets = 4 stance x 8 dirs
     for (let d = 0; d < 8; d++) {
-      this.anims.create({ key: 'hero_idle_' + d, frames: this.anims.generateFrameNumbers('hero', { start: d * 12, end: d * 12 + 3 }), frameRate: 5, repeat: -1, yoyo: true });
-      this.anims.create({ key: 'hero_run_' + d, frames: this.anims.generateFrameNumbers('hero', { start: d * 12 + 4, end: d * 12 + 11 }), frameRate: 13, repeat: -1 });
+      const H = HERO_COLS;
+      this.anims.create({ key: 'hero_idle_' + d, frames: this.anims.generateFrameNumbers('hero', { start: d * H, end: d * H + 3 }), frameRate: 5, repeat: -1, yoyo: true });
+      this.anims.create({ key: 'hero_run_' + d, frames: this.anims.generateFrameNumbers('hero', { start: d * H + 4, end: d * H + 11 }), frameRate: 13, repeat: -1 });
+      this.anims.create({ key: 'hero_swing_' + d, frames: this.anims.generateFrameNumbers('hero', { start: d * H + 12, end: d * H + 15 }), frameRate: 16, repeat: 0 });
+      this.anims.create({ key: 'hero_cast_' + d, frames: this.anims.generateFrameNumbers('hero', { start: d * H + 16, end: d * H + 19 }), frameRate: 11, repeat: 0 });
       window.NPCS.forEach(n => this.anims.create({ key: n.sheet + '_idle_' + d, frames: this.anims.generateFrameNumbers(n.sheet, { start: d * 4, end: d * 4 + 3 }), frameRate: 4, repeat: -1, yoyo: true }));
     }
     this.time.delayedCall(350, () => this.scene.start('Title'));
@@ -364,8 +479,17 @@ class TownScene extends Phaser.Scene {
     const s = CONFIG.HERO_START;
     this.hero = { gx: s.x, gy: s.y, dir: 2, path: [], moving: false, pendingInteract: null };
     const hp = Iso.toScreen(s.x, s.y);
-    this.heroSpr = this.add.sprite(hp.x, hp.y, 'hero', 2 * 12).setOrigin(0.5, 0.75).setTint(0xe6e2f0);
+    this.heroSpr = this.add.sprite(hp.x, hp.y, 'hero', 2 * HERO_COLS).setOrigin(0.5, 0.75).setTint(0xe6e2f0);
     this.heroSpr.play('hero_idle_2');
+    this.heroSpr.on('animationcomplete', (anim) => {
+      if (anim.key.startsWith('hero_swing') || anim.key.startsWith('hero_cast')) this.heroSpr.play((this.hero.moving ? 'hero_run_' : 'hero_idle_') + this.hero.dir, true);
+    });
+    // Combat-ish stats (no monsters yet; potions and skill need something to show)
+    this.stats = { hp: STATS.HP_START, mp: STATS.MP_START, hpPot: STATS.POTIONS, mpPot: STATS.POTIONS, skillReadyAt: 0, lockUntil: 0 };
+    this.tempLights = [];
+    this.interactTarget = null;
+    Controls.attach(this);
+    this.updateHud();
     this.marker = this.add.ellipse(0, 0, 30, 15).setStrokeStyle(1.5, 0xe2b45a, 0.9).setDepth(FLOOR_DEPTH + 2).setVisible(false);
     // Pathfinding
     this.es = new EasyStar.js();
@@ -402,7 +526,7 @@ class TownScene extends Phaser.Scene {
     // HUD
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('btnSound').classList.toggle('off', !Sound.on);
-    this.time.delayedCall(900, () => toast('Tap the ground to walk. Tap a villager to talk.', 3200));
+    this.time.delayedCall(900, () => toast(Settings.tapToMove ? 'Tap the ground to walk. Tap a villager to talk.' : 'Left thumb: move. Glowing button: talk.', 3200));
   }
   mulTint(a, b) {
     const r = ((a >> 16 & 255) * (b >> 16 & 255)) / 255, g = ((a >> 8 & 255) * (b >> 8 & 255)) / 255, bl = ((a & 255) * (b & 255)) / 255;
@@ -416,6 +540,7 @@ class TownScene extends Phaser.Scene {
 
   // ----- input -----
   onDown(p) {
+    if (!Settings.tapToMove) return;
     if (Dialogue.open || performance.now() - Dialogue.closedAt < 200) return;
     this.holding = true; this.holdStart = performance.now(); this.lastRetarget = 0; this.downAt = { x: p.x, y: p.y };
     const npc = this.npcAt(p.worldX, p.worldY);
@@ -526,14 +651,25 @@ class TownScene extends Phaser.Scene {
     let lines;
     if (!npc.talked) { lines = n.greeting.slice(); npc.talked = true; }
     else { lines = n.gossip[npc.gossipIdx % n.gossip.length].slice(); npc.gossipIdx++; }
-    Dialogue.show(n.name, n.role, lines, () => { this.time.delayedCall(2500, () => npc.spr.play(n.sheet + '_idle_' + n.face, true)); });
+    Dialogue.show(n.name, n.role, lines, () => {
+      this.time.delayedCall(2500, () => npc.spr.play(n.sheet + '_idle_' + n.face, true));
+      if (n.id === 'healer' && this.stats.hp < STATS.HP_MAX) { this.stats.hp = STATS.HP_MAX; this.floatText('Mended', '#ffd0a0'); Controls.flashOrb('hp'); this.updateHud(); toast('Mother Maelis mends your wounds.', 1800); }
+    });
   }
 
   // ----- per-frame -----
   update(time, delta) {
     this.es.calculate();
     const h = this.hero, dt = Math.min(delta, 50) / 1000;
-    if (h.path.length) {
+    const v = Dialogue.open ? { mag: 0 } : Controls.vector();
+    const locked = time < this.stats.lockUntil;
+    if (!Dialogue.open && Controls.attackHeld && !locked) this.attack();
+    if (v.mag > 0 && !locked) {
+      h.path = []; h.pendingInteract = null;
+      this.moveAnalog(v, dt);
+    } else if (v.mag > 0 || locked) {
+      // swinging/casting: stand still
+    } else if (h.path.length) {
       const t = h.path[0];
       const dx = t.x - h.gx, dy = t.y - h.gy, dist = Math.hypot(dx, dy);
       const step = CONFIG.HERO_SPEED * dt;
@@ -542,7 +678,10 @@ class TownScene extends Phaser.Scene {
       h.moving = true;
       if (dist <= step) { h.gx = t.x; h.gy = t.y; h.path.shift(); if (!h.path.length) { h.moving = false; this.heroSpr.play('hero_idle_' + h.dir, true); this.arrive(); } }
       else { h.gx += dx / dist * step; h.gy += dy / dist * step; }
+    } else if (h.moving) {
+      h.moving = false; this.heroSpr.anims.timeScale = 1; this.heroSpr.play('hero_idle_' + h.dir, true);
     }
+    this.updateInteract(time);
     const p = Iso.toScreen(h.gx, h.gy);
     this.heroSpr.setPosition(p.x, p.y).setDepth(p.y + 0.6);
     // Occlusion: tall things in front of the hero fade
@@ -580,8 +719,132 @@ class TownScene extends Phaser.Scene {
       rt.erase(li, s.x, s.y);
       if (gl.l.flicker) gl.g.setAlpha(0.5 * gl.l.glow * (0.85 + Math.sin(time * 0.02 + gl.phase) * 0.15));
     }
+    this.tempLights = this.tempLights.filter(t => time < t.until);
+    for (const t of this.tempLights) {
+      const k = 1 - (t.until - time) / t.dur, s = toS(t.x, t.y), r = t.r * (0.6 + 0.4 * Math.sin(Math.min(1, k) * Math.PI));
+      li.setScale((r * 2 / 512) * z, (r * 2 / 512) * z * 0.65);
+      rt.erase(li, s.x, s.y);
+    }
     rt.render();
   }
+
+  // ----- analog movement with grid collision + sliding -----
+  canStand(x, y) {
+    const r = 0.26;
+    for (const [ox, oy] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
+      const tx = Math.round(x + ox), ty = Math.round(y + oy);
+      if (!this.map.isFree(tx, ty)) return false;
+      if (this.npcs.some(n => n.data.x === tx && n.data.y === ty)) return false;
+    }
+    return true;
+  }
+  moveAnalog(v, dt) {
+    const h = this.hero;
+    // snap the screen-space stick angle to 8 screen directions, then map to grid directions
+    const oct = ((Math.round(Math.atan2(v.y, v.x) / (Math.PI / 4)) % 8) + 8) % 8;
+    const GRID = [[1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1]]; // right, down-right, down, down-left, left, up-left, up, up-right
+    const [gx, gy] = GRID[oct], len = Math.hypot(gx, gy);
+    const speed = CONFIG.HERO_SPEED * (0.3 + 0.7 * v.mag);
+    const nx = h.gx + gx / len * speed * dt, ny = h.gy + gy / len * speed * dt;
+    if (this.canStand(nx, ny)) { h.gx = nx; h.gy = ny; }
+    else if (gx !== 0 && this.canStand(nx, h.gy)) { h.gx = nx; }
+    else if (gy !== 0 && this.canStand(h.gx, ny)) { h.gy = ny; }
+    else if (gx !== 0 && gy === 0) { // head-on into a wall along x: nudge toward tile center on y to slip past corners
+      const cy = Math.round(h.gy); if (Math.abs(cy - h.gy) > 0.02 && this.canStand(h.gx, h.gy + Math.sign(cy - h.gy) * speed * dt * 0.7)) h.gy += Math.sign(cy - h.gy) * speed * dt * 0.7;
+    } else if (gy !== 0 && gx === 0) {
+      const cx = Math.round(h.gx); if (Math.abs(cx - h.gx) > 0.02 && this.canStand(h.gx + Math.sign(cx - h.gx) * speed * dt * 0.7, h.gy)) h.gx += Math.sign(cx - h.gx) * speed * dt * 0.7;
+    }
+    const d = DIR[gx + ',' + gy];
+    if (d !== h.dir || !h.moving || !this.heroSpr.anims.currentAnim || !this.heroSpr.anims.currentAnim.key.startsWith('hero_run')) { h.dir = d; this.heroSpr.play('hero_run_' + d, true); }
+    this.heroSpr.anims.timeScale = 0.55 + 0.45 * v.mag;
+    h.moving = true;
+  }
+
+  // ----- interact (talk/inspect) -----
+  updateInteract(time) {
+    if (this._intT && time - this._intT < 120) return; this._intT = time;
+    const h = this.hero; let best = null, bd = STATS.TALK_RANGE;
+    for (const n of this.npcs) { const d = Math.hypot(n.data.x - h.gx, n.data.y - h.gy); if (d < bd) { bd = d; best = { npc: n, label: 'Talk' }; } }
+    if (!best) for (const it of this.map.interactables) {
+      const cx = Math.max(it.x - 0.5, Math.min(h.gx, it.x + it.w - 0.5)), cy = Math.max(it.y - 0.5, Math.min(h.gy, it.y + it.h - 0.5));
+      const d = Math.hypot(cx - h.gx, cy - h.gy);
+      if (d < 1.4 && d < bd) { bd = d; best = { sign: it, label: 'Look' }; }
+    }
+    this.interactTarget = best;
+    Controls.setTalk(best ? (best.npc ? best.npc.data.name.split(' ')[0] : 'Look') : null);
+  }
+  interact() {
+    if (Dialogue.open || !this.interactTarget) return;
+    const t = this.interactTarget;
+    if (this.hero.moving) { this.hero.moving = false; this.hero.path = []; }
+    if (t.npc) this.talk(t.npc);
+    else { const it = t.sign; const cx = it.x + (it.w - 1) / 2, cy = it.y + (it.h - 1) / 2; this.hero.pendingInteract = { sign: it, cx, cy }; this.arrive(); }
+  }
+
+  // ----- actions -----
+  attack() {
+    const now = this.time.now, st = this.stats;
+    if (Dialogue.open || now < st.lockUntil) return;
+    st.lockUntil = now + STATS.SWING_MS;
+    this.hero.path = [];
+    this.heroSpr.anims.timeScale = 1;
+    this.heroSpr.play('hero_swing_' + this.hero.dir, true);
+    // swing arc in the facing direction (screen space)
+    const g = [[-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1]][this.hero.dir];
+    const sv = Iso.toScreen(g[0], g[1]), a = Math.atan2(sv.y, sv.x);
+    const arc = this.add.graphics().setPosition(this.heroSpr.x, this.heroSpr.y - 20).setDepth(this.heroSpr.depth + 1).setBlendMode(Phaser.BlendModes.ADD);
+    arc.lineStyle(5, 0xfff0c0, 0.9); arc.beginPath(); arc.arc(0, 0, 30, a - 1.1, a + 1.1); arc.strokePath();
+    arc.lineStyle(2, 0xffb050, 0.8); arc.beginPath(); arc.arc(0, 0, 36, a - 0.9, a + 0.9); arc.strokePath();
+    arc.setScale(0.7, 0.45);
+    this.tweens.add({ targets: arc, scaleX: 1.15, scaleY: 0.7, alpha: 0, duration: 230, ease: 'Cubic.easeOut', onComplete: () => arc.destroy() });
+    this.swings = (this.swings || 0) + 1;
+  }
+  skill() {
+    const now = this.time.now, st = this.stats;
+    if (Dialogue.open || now < st.lockUntil) return;
+    if (now < st.skillReadyAt) return;
+    if (st.mp < STATS.SKILL_COST) { toast('Not enough mana.', 1200); Controls.flashOrb('mp'); return; }
+    st.mp -= STATS.SKILL_COST; st.skillReadyAt = now + STATS.SKILL_COOLDOWN; st.lockUntil = now + STATS.CAST_MS;
+    this.hero.path = [];
+    this.heroSpr.anims.timeScale = 1;
+    this.heroSpr.play('hero_cast_' + this.hero.dir, true);
+    this.updateHud();
+    const x = this.heroSpr.x, y = this.heroSpr.y - 14;
+    this.time.delayedCall(160, () => {
+      const flash = this.add.image(x, y, 'glow').setBlendMode(Phaser.BlendModes.ADD).setDepth(1e9 + 2).setScale(0.4).setTint(0xffa040);
+      this.tweens.add({ targets: flash, scale: 2.4, alpha: 0, duration: 520, onComplete: () => flash.destroy() });
+      const N = 16;
+      for (let i = 0; i < N; i++) {
+        const ang = i / N * Math.PI * 2;
+        const f = this.add.image(x, y, 'glow').setBlendMode(Phaser.BlendModes.ADD).setDepth(y + 2).setScale(0.35).setTint(i % 2 ? 0xff6a10 : 0xffc040);
+        this.tweens.add({ targets: f, x: x + Math.cos(ang) * 120, y: y + Math.sin(ang) * 60, scale: 0.12, alpha: 0, duration: 650, ease: 'Quad.easeOut', onComplete: () => f.destroy() });
+      }
+      this.tempLights.push({ x, y, r: 260, until: this.time.now + 650, dur: 650 });
+    });
+    this.casts = (this.casts || 0) + 1;
+  }
+  drink(kind) {
+    const st = this.stats, hp = kind === 'hp';
+    if (Dialogue.open) return;
+    if ((hp ? st.hpPot : st.mpPot) <= 0) { toast('No ' + (hp ? 'healing' : 'mana') + ' potions left.', 1200); return; }
+    if (hp ? st.hp >= STATS.HP_MAX : st.mp >= STATS.MP_MAX) { toast((hp ? 'Health' : 'Mana') + ' is already full.', 1000); return; }
+    if (hp) { st.hpPot--; const g = Math.min(STATS.HP_POTION, STATS.HP_MAX - st.hp); st.hp += g; this.floatText('+' + g, '#ff6a5a'); }
+    else { st.mpPot--; const g = Math.min(STATS.MP_POTION, STATS.MP_MAX - st.mp); st.mp += g; this.floatText('+' + g, '#7aa0ff'); }
+    Controls.flashOrb(kind);
+    const col = hp ? 0xff3030 : 0x4070ff, x = this.heroSpr.x, y = this.heroSpr.y;
+    for (let i = 0; i < 14; i++) {
+      const c = this.add.circle(x + Phaser.Math.Between(-16, 16), y - Phaser.Math.Between(0, 30), Phaser.Math.Between(2, 4), col, 0.9).setBlendMode(Phaser.BlendModes.ADD).setDepth(this.heroSpr.depth + 1);
+      this.tweens.add({ targets: c, y: c.y - Phaser.Math.Between(30, 60), alpha: 0, duration: Phaser.Math.Between(500, 900), delay: i * 25, onComplete: () => c.destroy() });
+    }
+    const ring = this.add.ellipse(x, y, 40, 20).setStrokeStyle(2, col, 0.9).setDepth(FLOOR_DEPTH + 3).setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: ring, scale: 1.8, alpha: 0, duration: 600, onComplete: () => ring.destroy() });
+    this.updateHud();
+  }
+  floatText(txt, color) {
+    const t = this.add.text(this.heroSpr.x, this.heroSpr.y - 64, txt, { fontFamily: 'Georgia, serif', fontSize: '14px', color, stroke: '#000', strokeThickness: 3, resolution: DPR * 2 }).setOrigin(0.5).setDepth(9e8);
+    this.tweens.add({ targets: t, y: t.y - 26, alpha: 0, duration: 1100, onComplete: () => t.destroy() });
+  }
+  updateHud() { Controls.setStats(this.stats); }
 }
 
 // ---------- boot ----------
@@ -606,12 +869,12 @@ function makeGame() {
 window.addEventListener('DOMContentLoaded', () => {
   Dialogue.init();
   document.getElementById('btnCloseCredits').addEventListener('click', () => document.getElementById('credits').classList.add('hidden'));
-  document.getElementById('btnSound').addEventListener('click', (e) => { e.stopPropagation(); Sound.start(); Sound.toggle(); });
-  document.getElementById('btnMenu').addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (Dialogue.open) Dialogue.close();
-    const g = window.__game; if (g && g.scene.isActive('Town')) { g.scene.stop('Town'); g.scene.start('Title'); }
-  });
+  document.getElementById('btnSound').addEventListener('click', (e) => { e.stopPropagation(); Sound.start(); Sound.toggle(); if (Menu.sync) Menu.sync(); });
+  document.getElementById('btnMenu').addEventListener('click', (e) => { e.stopPropagation(); Menu.open(); });
+  Controls.init(); Menu.init();
+  document.addEventListener('contextmenu', e => e.preventDefault());
+  document.addEventListener('touchmove', e => { if (!e.target.closest || !e.target.closest('#credits .panel')) e.preventDefault(); }, { passive: false });
+  document.addEventListener('dblclick', e => e.preventDefault());
   document.addEventListener('gesturestart', e => e.preventDefault());
   makeGame();
 });
