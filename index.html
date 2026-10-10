@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Duskhollow</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a080e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Duskhollow">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud" class="hidden">
+  <button id="btnMenu" class="hudbtn" aria-label="Menu">&#9776;</button>
+  <button id="btnSound" class="hudbtn" aria-label="Sound">&#9834;</button>
+  <div id="placeName">Duskhollow</div>
+</div>
+
+<div id="dialogue" class="hidden" role="dialog">
+  <div id="dlgName"></div>
+  <div id="dlgRole"></div>
+  <div id="dlgText"></div>
+  <div id="dlgHint">tap to continue</div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<div id="credits" class="hidden">
+  <div class="panel">
+    <h2>Credits</h2>
+    <p><b>Duskhollow</b>, a proof of concept. An original game inspired by classic late-90s gothic action RPGs. It uses no assets from any commercial game.</p>
+    <h3>Art</h3>
+    <ul>
+      <li><b>Grassland Tileset</b> by Clint Bellanger, with contributions from Lamoot, Blender Foundation (apricot.blender.org), lattice, p0ss, Bart K., and Sindwiller. License: CC-BY-SA 3.0 / CC-BY 3.0. <a href="https://opengameart.org/content/grassland-tileset" target="_blank" rel="noopener">opengameart.org/content/grassland-tileset</a>. Tile coordinates are from the Flare project (<a href="https://github.com/flareteam/flare-game" target="_blank" rel="noopener">flare-game</a>, CC-BY-SA 3.0).</li>
+      <li><b>Isometric Hero and Heroine</b> by Clint Bellanger. Includes Distressed Leather texture by D. Sharon Pruitt (CC-BY); a few weapons loosely inspired by Naraphim (CC-BY-SA). License: CC-BY 3.0. <a href="https://opengameart.org/content/isometric-hero-and-heroine" target="_blank" rel="noopener">opengameart.org/content/isometric-hero-and-heroine</a>. In Duskhollow, the armor, weapon, and head layers were combined into the hero and townsfolk sprite sheets.</li>
+      <li>Light and glow textures, icons, and UI were made for Duskhollow.</li>
+    </ul>
+    <h3>Code</h3>
+    <ul>
+      <li><a href="https://phaser.io" target="_blank" rel="noopener">Phaser 4</a> © Phaser Studio Inc. MIT License.</li>
+      <li><a href="https://github.com/prettymuchbryce/easystarjs" target="_blank" rel="noopener">EasyStar.js</a> by Bryce Neal. MIT License.</li>
+    </ul>
+    <h3>Sound</h3>
+    <ul><li>Ambient wind is generated live with the Web Audio API (no recordings).</li></ul>
+    <p class="small">Licenses: <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC-BY 3.0</a>, <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener">CC-BY-SA 3.0</a>. Changes to CC-BY-SA artwork are shared under the same license.</p>
+    <button id="btnCloseCredits" class="btn">Close</button>
+  </div>
+</div>
+
+<div id="rotate">
+  <div class="rotbox">
+    <div class="phone"></div>
+    <p>Turn your phone sideways</p>
+    <p class="small">Duskhollow plays in landscape.</p>
+  </div>
+</div>
+
+<script src="vendor/phaser.min.js"></script>
+<script src="vendor/easystar.min.js"></script>
+<script src="src/tiledefs.js"></script>
+<script src="src/data.js"></script>
+<script src="src/main.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW failed', e)));
+}
+</script>
+</body>
+</html>
